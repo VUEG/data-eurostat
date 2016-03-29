@@ -1,0 +1,17 @@
+import os
+from snakemake.remote.HTTP import RemoteProvider as HTTPRemoteProvider
+
+HTTP = HTTPRemoteProvider()
+
+BASE_URL = "ec.europa.eu/eurostat/cache/GISCO/geodatafiles"
+ZIP_URL = BASE_URL + "/" + "NUTS_2013_01M_SH.zip"
+
+rule get_data:
+    input:
+        HTTP.remote(ZIP_URL, insecure=True, keep_local=False),
+    output:
+        "data"
+    log:
+        "log/getdata.log"
+    run:
+        shell("unzip -o {input} -d {output} >& {log}")
