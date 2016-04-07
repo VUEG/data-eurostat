@@ -15,3 +15,17 @@ rule get_data:
         "log/getdata.log"
     run:
         shell("unzip -o {input} -d {output} >& {log}")
+
+# Rule for importing the NUTS data to Postgis. NOTE that the Postgis DB needs to
+# be set up separately AND it must be running.
+rule import_to_postgis:
+    input:
+        shapefile="data/NUTS_2013_01M_SH/data/NUTS_RG_01M_2013.shp"
+    output:
+        # The output here is just a dummy.
+        "data"
+    log:
+        "log/import_to_postgis.log"
+    message: "Importing {input} to Postgis.."
+    shell:
+        "shp2pgsql -I -s 4258 -d -g geom {input.shapefile} eurostat.nuts_rg_01m_2013 | psql -h localhost -p 5432 -d gis -U gisuser >& {log}"
