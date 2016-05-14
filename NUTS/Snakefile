@@ -6,15 +6,58 @@ HTTP = HTTPRemoteProvider()
 BASE_URL = "ec.europa.eu/eurostat/cache/GISCO/geodatafiles"
 ZIP_URL = BASE_URL + "/" + "NUTS_2013_01M_SH.zip"
 
+NUTS_DATASETS = ["NUTS_BN_01M_2013", "NUTS_JOIN_LI_2013", "NUTS_LB_2013",
+                 "NUTS_RG_01M_2013", "NUTS_SEPA_LI_2013"]
+
+NUTS_LEVELS = ["level0", "level1", "level2", "level3"]
+
+# NOTE: GDAL does not support writing ESRI Shapefile index files (.sbn/.shx)
+SHP_COMPONENTS = ["dbf", "prj", "shx", "shp"]
+
+rule all:
+    input:
+        expand("data/nuts/{dataset}/{dataset}.{ext}", dataset=NUTS_DATASETS,
+               ext=SHP_COMPONENTS) + \
+        expand("data/nuts/NUTS_RG_01M_2013/{level}/NUTS_RG_01M_2013.{ext}",
+               level=NUTS_LEVELS, ext=SHP_COMPONENTS)
+
 rule get_data:
     input:
         HTTP.remote(ZIP_URL, insecure=True, keep_local=False),
     output:
-        "data"
+        org="data/org",
+        final=expand("data/nuts/{dataset}/{dataset}.{ext}", dataset=NUTS_DATASETS,
+                     ext=SHP_COMPONENTS)
     log:
         "log/getdata.log"
     run:
-        shell("unzip -o {input} -d {output} >& {log}")
+        shell("unzip -o {input} -d {output.org} >& {log}")
+        for target_item in output.final:
+            org_item = os.path.join(output.org, "NUTS_2013_01M_SH", "data",
+                                    os.path.basename(target_item))
+            shell("cp {0} {1}".format(org_item, target_item))
+        # Also copy the metadata and the like
+        metadata_dir = os.path.join(output.org, "NUTS_2013_01M_SH", "metadata")
+        readme_file = os.path.join(output.org, "NUTS_2013_01M_SH", "readme.txt")
+        target_dir = "data/nuts"
+        shell("cp -R {0} {1}".format(metadata_dir, target_dir))
+        shell("cp {0} {1}".format(readme_file, target_dir))
+
+# Rule to separate different NUTS levels {0, 1, 2, 3} into individual shapefiles
+rule separate_levels:
+    input:
+        expand("data/nuts/{dataset}/{dataset}.{ext}", dataset=NUTS_DATASETS,
+                     ext=SHP_COMPONENTS)
+    output:
+        expand("data/nuts/NUTS_RG_01M_2013/{level}/NUTS_RG_01M_2013.{ext}", level=NUTS_LEVELS, ext=SHP_COMPONENTS)
+    message:
+        "Separating NUTS level 0, 1, 2, and 3"
+    run:
+        for level in [0, 1, 2, 3]:
+            # We only need to use the RG (region) shapefile
+            input_shp = "data/nuts/NUTS_RG_01M_2013/NUTS_RG_01M_2013.shp"
+            output_shp = "data/nuts/NUTS_RG_01M_2013/level{}/NUTS_RG_01M_2013.shp".format(level)
+            shell("ogr2ogr -where STAT_LEVL_={0} {1} {2}".format(level, output_shp, input_shp))
 
 # Rule for importing the NUTS data to Postgis. NOTE that the Postgis DB needs to
 # be set up separately AND it must be running.
