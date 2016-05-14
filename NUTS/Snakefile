@@ -56,7 +56,7 @@ rule separate_levels:
         for level in [0, 1, 2, 3]:
             # We only need to use the RG (region) shapefile
             input_shp = "data/nuts/NUTS_RG_01M_2013/NUTS_RG_01M_2013.shp"
-            output_shp = "data/nuts/NUTS_RG_01M_2013/level{}/NUTS_RG_01M_2013.shp".format(level)
+            output_shp = "data/nuts/NUTS_RG_01M_2013/level{0}/NUTS_RG_01M_2013_level{1}.shp".format(level, level)
             shell("ogr2ogr -where STAT_LEVL_={0} {1} {2}".format(level, output_shp, input_shp))
 
 # Rule for importing the NUTS data to Postgis. NOTE that the Postgis DB needs to
