@@ -1,4 +1,8 @@
+import glob
 import os
+import re
+import shutil
+from distutils.dir_util import copy_tree
 from snakemake.remote.HTTP import RemoteProvider as HTTPRemoteProvider
 
 HTTP = HTTPRemoteProvider()
@@ -6,58 +10,76 @@ HTTP = HTTPRemoteProvider()
 BASE_URL = "ec.europa.eu/eurostat/cache/GISCO/geodatafiles"
 ZIP_URL = BASE_URL + "/" + "NUTS_2013_01M_SH.zip"
 
-NUTS_DATASETS = ["NUTS_BN_01M_2013", "NUTS_JOIN_LI_2013", "NUTS_LB_2013",
-                 "NUTS_RG_01M_2013", "NUTS_SEPA_LI_2013"]
+#NUTS_RESOLUTIONS = ["01M", "03M", "10M", "20M", "60M"]
+NUTS_RESOLUTIONS = ["60M"]
 
-NUTS_LEVELS = ["level0", "level1", "level2", "level3"]
+# Full list of included datasets:
+# ["NUTS_BN", "NUTS_JOIN_LI", "NUTS_LB", "NUTS_RG", "NUTS_SEPA_LI"]
+# Use only "NUTS_RG" (regions) for now -> harcoded in the rules
+NUTS_DATASETS = []
+
+NUTS_LEVELS = {"NUTS0": 0, "NUTS1": 1, "NUTS2": 2, "NUTS3": 3}
 
 # NOTE: GDAL does not support writing ESRI Shapefile index files (.sbn/.shx)
 SHP_COMPONENTS = ["dbf", "prj", "shx", "shp"]
 
 rule all:
     input:
-        expand("data/nuts/{dataset}/{dataset}.{ext}", dataset=NUTS_DATASETS,
-               ext=SHP_COMPONENTS) + \
-        expand("data/nuts/NUTS_RG_01M_2013/{level}/NUTS_RG_01M_2013.{ext}",
-               level=NUTS_LEVELS, ext=SHP_COMPONENTS)
+        expand("data/nuts/NUTS_{resolution}_2013/{level}/{level}_{resolution}_2013.{ext}",
+               resolution=NUTS_RESOLUTIONS, level=list(NUTS_LEVELS.keys()),
+               ext=SHP_COMPONENTS)
 
 rule get_data:
     input:
-        HTTP.remote(ZIP_URL, insecure=True, keep_local=False),
+        HTTP.remote(expand(BASE_URL + "/" + "NUTS_2013_{resolution}_SH.zip",
+                           resolution=NUTS_RESOLUTIONS),
+                    insecure=True, keep_local=False),
     output:
-        org="data/org",
-        final=expand("data/nuts/{dataset}/{dataset}.{ext}", dataset=NUTS_DATASETS,
-                     ext=SHP_COMPONENTS)
+        org_root_dir="data/org",
+        dst_dirs=expand("data/org/NUTS_2013/{resolution}", resolution=NUTS_RESOLUTIONS)
     log:
         "log/getdata.log"
     run:
-        shell("unzip -o {input} -d {output.org} >& {log}")
-        for target_item in output.final:
-            org_item = os.path.join(output.org, "NUTS_2013_01M_SH", "data",
-                                    os.path.basename(target_item))
-            shell("cp {0} {1}".format(org_item, target_item))
-        # Also copy the metadata and the like
-        metadata_dir = os.path.join(output.org, "NUTS_2013_01M_SH", "metadata")
-        readme_file = os.path.join(output.org, "NUTS_2013_01M_SH", "readme.txt")
-        target_dir = "data/nuts"
-        shell("cp -R {0} {1}".format(metadata_dir, target_dir))
-        shell("cp {0} {1}".format(readme_file, target_dir))
+        for data_zip in input:
+            shell("unzip -o {data_zip} -d {output.org_root_dir} >& {log}")
+        for dst_dir in output.dst_dirs:
+            # Find the expanded data directory
+            org_dir = glob.glob("data/org/NUTS_2013_*_SH/")[0]
+            if not os.path.exists(dst_dir):
+                os.makedirs(dst_dir)
+            copy_tree(os.path.join(org_dir, "data"), dst_dir)
+            metadata_dir = os.path.join(org_dir, "metadata")
+            readme_file = os.path.join(org_dir, "readme.txt")
+            copy_tree(metadata_dir, dst_dir)
+            shutil.copy2(readme_file, dst_dir)
+            # Remove the original unzipped folder
+            shutil.rmtree(org_dir)
 
 # Rule to separate different NUTS levels {0, 1, 2, 3} into individual shapefiles
 rule separate_levels:
     input:
-        expand("data/nuts/{dataset}/{dataset}.{ext}", dataset=NUTS_DATASETS,
-                     ext=SHP_COMPONENTS)
+        src_dirs=rules.get_data.output.dst_dirs
     output:
-        expand("data/nuts/NUTS_RG_01M_2013/{level}/NUTS_RG_01M_2013.{ext}", level=NUTS_LEVELS, ext=SHP_COMPONENTS)
+        rules.all.input
     message:
         "Separating NUTS level 0, 1, 2, and 3"
     run:
-        for level in [0, 1, 2, 3]:
+        for src_dir in input.src_dirs:
+            # Get the resolution: it's the last item in src_dir
+            res = src_dir.split(os.path.sep)[-1]
             # We only need to use the RG (region) shapefile
-            input_shp = "data/nuts/NUTS_RG_01M_2013/NUTS_RG_01M_2013.shp"
-            output_shp = "data/nuts/NUTS_RG_01M_2013/level{0}/NUTS_RG_01M_2013_level{1}.shp".format(level, level)
-            shell("ogr2ogr -where STAT_LEVL_={0} {1} {2}".format(level, output_shp, input_shp))
+            input_shp = glob.glob(os.path.join(src_dir, "NUTS_RG_*_2013.shp"))[0]
+            for level_name, level_no in NUTS_LEVELS.items():
+                # Match the output filename with level and resolution
+                pattern = "data/nuts/NUTS_{}_2013\/{}\/{}_60M_2013\.shp".format(res, level_name, level_name)
+                r = re.compile(pattern)
+                output_shp = list(filter(r.match, output))
+                if len(output_shp) == 0:
+                    raise ValueError("No match found from outputs")
+                elif len(output_shp) > 1:
+                    print("Warning: multiple matches found, using only first")
+                output_shp = output_shp[0]
+                shell("ogr2ogr -where STAT_LEVL_={0} {1} {2}".format(level_no, output_shp, input_shp))
 
 # Rule for importing the NUTS data to Postgis. NOTE that the Postgis DB needs to
 # be set up separately AND it must be running.
