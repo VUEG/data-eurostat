@@ -10,8 +10,7 @@ HTTP = HTTPRemoteProvider()
 BASE_URL = "ec.europa.eu/eurostat/cache/GISCO/geodatafiles"
 ZIP_URL = BASE_URL + "/" + "NUTS_2013_01M_SH.zip"
 
-#NUTS_RESOLUTIONS = ["01M", "03M", "10M", "20M", "60M"]
-NUTS_RESOLUTIONS = ["60M"]
+NUTS_RESOLUTIONS = ["01M", "03M", "10M", "20M", "60M"]
 
 # Full list of included datasets:
 # ["NUTS_BN", "NUTS_JOIN_LI", "NUTS_LB", "NUTS_RG", "NUTS_SEPA_LI"]
@@ -71,11 +70,11 @@ rule separate_levels:
             input_shp = glob.glob(os.path.join(src_dir, "NUTS_RG_*_2013.shp"))[0]
             for level_name, level_no in NUTS_LEVELS.items():
                 # Match the output filename with level and resolution
-                pattern = "data/nuts/NUTS_{}_2013\/{}\/{}_60M_2013\.shp".format(res, level_name, level_name)
+                pattern = "data/nuts/NUTS_{}_2013\/{}\/{}_{}_2013\.shp".format(res, level_name, level_name, res)
                 r = re.compile(pattern)
                 output_shp = list(filter(r.match, output))
                 if len(output_shp) == 0:
-                    raise ValueError("No match found from outputs")
+                    raise ValueError("No match found from outputs: {}".format(pattern))
                 elif len(output_shp) > 1:
                     print("Warning: multiple matches found, using only first")
                 output_shp = output_shp[0]
